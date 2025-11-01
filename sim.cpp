@@ -136,11 +136,6 @@ public:
             auto imuData = imuQueue.pop();
             auto gnssData = gnssQueue.pop();
             
-            if (!imuData && !gnssData) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
-                continue;
-            }
-
             // prepare outputs with defaults
             double att_x = 0.0, att_y = 0.0, att_z = 0.0;
             double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
