@@ -5,7 +5,7 @@
 // Usage: ./sim <scenario>
 // scenario: 0 = nominal, 1 = IMUs drop out sequentially, 2 = GNSS dropout 500ms
 //
-// Writes CSV to sim_<scenario>_<start_ts>.csv
+// Writes TXT to sim_<scenario>_<start_ts>.txt
 
 #include <iostream>
 #include <thread>
@@ -36,6 +36,7 @@ public:
 
     std::optional<T> pop() {
         std::unique_lock<std::mutex> lock(mtx_);
+        //cv_.wait(lock, [this]{ return !q_.empty() || !running; });
         if (q_.empty())
             return std::nullopt;
         T val = q_.front();
@@ -69,11 +70,17 @@ std::atomic<bool> running{true};
 
 // ------------- Sensors definition --------------
 void SensorIMU(double& time) {
+    auto start = std::chrono::steady_clock::now();
     // random noise generator
     std::mt19937 rdn {42};
     std::normal_distribution<double> noise(0.0, 0.1);
 
+    double dt_imu = 0.01;
+
     while (running) {   
+        auto now = std::chrono::steady_clock::now();
+        time = std::chrono::duration<double>(now - start).count();
+
         IMUData data;
         data.time = time;
 
@@ -83,15 +90,22 @@ void SensorIMU(double& time) {
         imuQueue.push(data);
 
         std::this_thread::sleep_for(std::chrono::milliseconds(10)); // 100 Hz
+        // time += dt_imu;
     };
 };
 
 void SensorGNSS(double& time) {
+    auto start = std::chrono::steady_clock::now();
     // random noise generator
     std::mt19937 rdn {42};
     std::normal_distribution<double> noise(0.0, 0.1);
 
+    double dt_gnss = 0.05;
+
     while (running) {
+        auto now = std::chrono::steady_clock::now();
+        time = std::chrono::duration<double>(now - start).count();
+
         GNSSData data;
         data.time = time;
         // generate slowly changing position (e.g., linear + small sinusoid) -> review values
@@ -101,6 +115,7 @@ void SensorGNSS(double& time) {
         gnssQueue.push(data);
 
         std::this_thread::sleep_for(std::chrono::milliseconds(50)); // 20 Hz
+        // time += dt_gnss;
     };
 };
 // ------------- Processing --------------
@@ -114,31 +129,39 @@ struct ProcessingOutput {
 
 class Processing {
 public:
-    Processing(): log_stream_(std::cout) {};
+    Processing(std::ofstream& os) : log_stream_(os) {}
     
     void run(){
         while (running) {
             auto imuData = imuQueue.pop();
             auto gnssData = gnssQueue.pop();
+            
+            if (!imuData && !gnssData) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                continue;
+            }
 
             // prepare outputs with defaults
             double att_x = 0.0, att_y = 0.0, att_z = 0.0;
             double pos_x = 0.0, pos_y = 0.0, pos_z = 0.0;
+            double t = 0.0;
 
-            // simple placeholder processing; ignore empty optionals
+            // module processing
             if (imuData) {
                 att_x = imuData->rate_x;
                 att_y = imuData->rate_y;
                 att_z = imuData->rate_z;
+                t = imuData->time;
             }
 
             if (gnssData) {
                 pos_x = gnssData->pos_x;
                 pos_y = gnssData->pos_y;
                 pos_z = gnssData->pos_z;
+                if (t == 0.0) t = gnssData->time;
             }
             
-            double t = duration_cast<duration<double>>(steady_clock::now().time_since_epoch()).count();
+            //double t = duration_cast<duration<double>>(steady_clock::now().time_since_epoch()).count();
             ProcessingOutput out_line{t, att_x, att_y, att_z, pos_x, pos_y, pos_z};
 
             log_line(out_line);
@@ -150,18 +173,15 @@ public:
 
 private:
     void log_line(const ProcessingOutput &o) {
-        // Format txt line:
-        // sim_time,att_x,att_y,att_z,pos_x,pos_y,pos_z
-        std::ostringstream ss;
-        ss.setf(std::ios::fixed); ss.precision(6);
-        double t;
-        ss << o.time << ',';
-        ss << o.att_x << ',' << o.att_y << ',' << o.att_z << ',';
-        ss << o.pos_x << ',' << o.pos_y << ',' << o.pos_z;
-        log_stream_ << ss.str() << '\n';
+        log_stream_.setf(std::ios::fixed);
+        log_stream_.precision(6);
+        log_stream_ << o.time << ','
+                    << o.att_x << ',' << o.att_y << ',' << o.att_z << ','
+                    << o.pos_x << ',' << o.pos_y << ',' << o.pos_z << '\n';
+        log_stream_.flush(); // make sure it's written immediately
     }
 
-    std::ostream &log_stream_;
+    std::ofstream &log_stream_;
 
 };
 // ------------- FDIR --------------
@@ -173,11 +193,6 @@ int main(int argc, char* argv[]) {
     if (argc > 1) scenario = std::atoi(argv[1]);
 
     const double sim_duration = 10.0;   // seconds
-    //const double dt_imu = 0.01;         // 100 Hz
-    //const double dt_gnss = 0.05;        // 20 Hz
-    //const double dt_proc = 0.02;        // 50 Hz
-    //bool running = true; 
-    //int it_number = 0;
 
     // data
     std::vector<IMUData> imu_data;
@@ -188,9 +203,10 @@ int main(int argc, char* argv[]) {
     log << "time,att_x,att_y,att_z,pos_x,pos_y,pos_z\n";
 
     // processing loop
-    Processing proc;
+    Processing proc(log);
     std::thread proc_thread(&Processing::run, &proc);
 
+    // do I need this?
     double t = 0.0;
     auto start_time = std::chrono::steady_clock::now();
 
@@ -208,6 +224,6 @@ int main(int argc, char* argv[]) {
     if (gnss_thread.joinable()) gnss_thread.join();
     if (proc_thread.joinable()) proc_thread.join();
 
-    return 0;
-
+    log.close();
+    std::cout << "Simulation done. Wrote simple_log.txt\n"; 
 };
