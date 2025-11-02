@@ -37,7 +37,7 @@ public:
 
     std::optional<T> pop() {
         std::unique_lock<std::mutex> lock(mtx_);
-        cv_.wait(lock, [this]{ return !q_.empty() || !running; });
+        //cv_.wait(lock, [this]{ return !q_.empty() || !running; });
         if (q_.empty())
             return std::nullopt;
         T val = q_.front();
