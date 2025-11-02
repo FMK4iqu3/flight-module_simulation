@@ -37,7 +37,7 @@ public:
 
     std::optional<T> pop() {
         std::unique_lock<std::mutex> lock(mtx_);
-        //cv_.wait(lock, [this]{ return !q_.empty() || !running; });
+        cv_.wait(lock, [this]{ return !q_.empty() || !running; });
         if (q_.empty())
             return std::nullopt;
         T val = q_.front();
@@ -70,54 +70,70 @@ ThreadSafeQueue<GNSSData> gnssQueue0, gnssQueue1;
 std::atomic<bool> running{true};
 
 // ------------- Sensors definition --------------
-void SensorIMU(double& time, ThreadSafeQueue<IMUData>& queue) {
-    auto start = std::chrono::steady_clock::now();
-    // random noise generator
-    std::mt19937 rdn {42};
-    std::normal_distribution<double> noise(0.0, 0.1);
+class SensorIMU {
+public:
+    SensorIMU(ThreadSafeQueue<IMUData>& queue, double rate_hz = 100.0) 
+        : queue_(queue), dt_(1.0 / rate_hz) {};
 
-    double dt_imu = 0.01;
+    void run() {
+        auto start = std::chrono::steady_clock::now();
+        // random noise generator
+        std::mt19937 rdn {42};
+        std::normal_distribution<double> noise(0.0, 0.1);
 
-    while (running) {   
-        auto now = std::chrono::steady_clock::now();
-        time = std::chrono::duration<double>(now - start).count();
+        while (running) {   
+            auto now = std::chrono::steady_clock::now();
+            double time = std::chrono::duration<double>(now - start).count();
 
-        IMUData data;
-        data.time = time;
+            IMUData data;
+            data.time = time;
 
-        data.rate_x = 0.01 * std::sin(2 * M_PI * 0.2 * time) + noise(rdn);
-        data.rate_y = 0.01 * std::cos(2 * M_PI * 0.15 * time) + noise(rdn);
-        data.rate_z = 0.01 * std::sin(2 * M_PI * 0.1 * time) + noise(rdn);
-        queue.push(data);
+            data.rate_x = 0.01 * std::sin(2 * M_PI * 0.2 * time) + noise(rdn);
+            data.rate_y = 0.01 * std::cos(2 * M_PI * 0.15 * time) + noise(rdn);
+            data.rate_z = 0.01 * std::sin(2 * M_PI * 0.1 * time) + noise(rdn);
+            queue_.push(data);
 
-        std::this_thread::sleep_for(std::chrono::milliseconds(10)); // 100 Hz
-        // time += dt_imu;
+            std::this_thread::sleep_for(std::chrono::duration<double>(dt_));
+        };
     };
+
+private:
+
+    ThreadSafeQueue<IMUData>&  queue_;
+    double dt_;
+
 };
 
-void SensorGNSS(double& time, ThreadSafeQueue<GNSSData>& queue) {
-    auto start = std::chrono::steady_clock::now();
-    // random noise generator
-    std::mt19937 rdn {42};
-    std::normal_distribution<double> noise(0.0, 0.1);
+class SensorGNSS {
+public:
+    SensorGNSS(ThreadSafeQueue<GNSSData>& queue, double rate_hz = 20.0) 
+            : queue_(queue), dt_(1.0 / rate_hz) {}
 
-    double dt_gnss = 0.05;
+    void run() {
+        auto start = std::chrono::steady_clock::now();
+        // random noise generator
+        std::mt19937 rdn {37};
+        std::normal_distribution<double> noise(0.0, 0.1);
+               
+        while (running) {
+            auto now = std::chrono::steady_clock::now();
+            double time = std::chrono::duration<double>(now - start).count();
 
-    while (running) {
-        auto now = std::chrono::steady_clock::now();
-        time = std::chrono::duration<double>(now - start).count();
+            GNSSData data;
+            data.time = time;
+            // generate slowly changing position (e.g., linear + small sinusoid) -> review values
+            data.pos_x = 7000.0 + 0.1 * time + 2.0 * std::sin(2.0 * M_PI * 0.01 * time) + noise(rdn);
+            data.pos_y = -1200.0 + 0.05 * time + 1.2 * std::cos(2.0 * M_PI * 0.012 * time) + noise(rdn);
+            data.pos_z = 10.0 + 0.01 * std::sin(2.0 * M_PI * 0.02 * time) + noise(rdn);
+            queue_.push(data);
 
-        GNSSData data;
-        data.time = time;
-        // generate slowly changing position (e.g., linear + small sinusoid) -> review values
-        data.pos_x = 7000.0 + 0.1 * time + 2.0 * std::sin(2.0 * M_PI * 0.01 * time) + noise(rdn);
-        data.pos_y = -1200.0 + 0.05 * time + 1.2 * std::cos(2.0 * M_PI * 0.012 * time) + noise(rdn);
-        data.pos_z = 10.0 + 0.01 * std::sin(2.0 * M_PI * 0.02 * time) + noise(rdn);
-        queue.push(data);
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(50)); // 20 Hz
-        // time += dt_gnss;
+            std::this_thread::sleep_for(std::chrono::duration<double>(dt_)); // 20 Hz
+        };
     };
+
+private:
+    ThreadSafeQueue<GNSSData>& queue_;
+    double dt_;
 };
 // ------------- Processing --------------
 struct ProcessingOutput {
@@ -130,7 +146,8 @@ struct ProcessingOutput {
 
 class Processing {
 public:
-    Processing(std::ofstream& os) : log_stream_(os) {}
+    Processing(std::ofstream& data_os, std::ofstream& warn_os) 
+        : log_stream_(data_os), warn_stream_(warn_os) {}
     
     void run(){
         while (running) {
@@ -148,13 +165,19 @@ public:
             double t = 0.0;
 
             // module processing
+            // check data
+            imu_signal_check(t, imu0, "0");
+            imu_signal_check(t, imu1, "1");
+            imu_signal_check(t, imu2, "2");
+            gnss_signal_check(t, gnss0, "0", gnss_last_time_);
+            gnss_signal_check(t, gnss1, "1", gnss_last_time_);
+
             // outputting log files per module
             log_imu_data(imu0, "0");
             log_imu_data(imu1, "1");
             log_imu_data(imu2, "2");
             log_gnss_data(gnss0, "0");
             log_gnss_data(gnss1, "1");
-
 
             // --- IMU averaging ---
             imu_average(imu0, sum_att_x, sum_att_y, sum_att_z, imu_count, t);
@@ -183,19 +206,50 @@ public:
     };
 
 private:
+    std::ofstream &log_stream_;  
+    std::ofstream &warn_stream_;
+
+    // signal check
+    void gnss_signal_check(double t, const std::optional<GNSSData>& gnss, const std::string& sensor_id, double last_gnss_time) {
+        bool missing_gnss = !gnss;
+        //if (!gnss) missing_gnss = true;
+        bool gnss_old = (t - last_gnss_time) > 1.0;
+
+        if (missing_gnss) {
+            warn_stream_.setf(std::ios::fixed);
+            warn_stream_.precision(6);
+            warn_stream_ << "[WARNING]";
+            if (missing_gnss) warn_stream_ << "Missing GNSS_" << sensor_id;
+            if (gnss_old) warn_stream_ << " GNSS_" << sensor_id << " older than 1 sec";
+            warn_stream_ << " at t=" << t << "\n";
+            warn_stream_.flush();
+        }
+
+    }
+    void imu_signal_check(double t, const std::optional<IMUData>& imu, const std::string& sensor_id) {
+        bool missing_imu = !imu;
+        //if (!imu) missing_imu = true;
+
+        if (missing_imu) {
+            warn_stream_.setf(std::ios::fixed);
+            warn_stream_.precision(6);
+            warn_stream_ << "[WARNING]";
+            warn_stream_ << "Missing IMU_" << sensor_id << " data for time " << t << "\n";
+        }        
+    }
+
     // log helper functions
     void log_line(const ProcessingOutput &o) {
         log_stream_.setf(std::ios::fixed);
         log_stream_.precision(6);
         log_stream_ << "=============== AVERAGE ===============\n";
+        log_stream_ << "time, rate_x, rate_y, rate_z, pos_x, pos_y, pos_z\n";
         log_stream_ << o.time << ','
                     << o.att_x << ',' << o.att_y << ',' << o.att_z << ','
                     << o.pos_x << ',' << o.pos_y << ',' << o.pos_z << '\n';
         log_stream_ << "=======================================\n";
         log_stream_.flush(); // make sure it's written immediately
     }
-
-    std::ofstream &log_stream_;
 
     void log_gnss_data(const std::optional<GNSSData>& gnss, const std::string& sensor_id) {
         if (gnss) {
@@ -222,6 +276,7 @@ private:
     }
 
     // --- Helper functions ---
+    double gnss_last_time_ = 0.0;
     void imu_average(const std::optional<IMUData>& imu,
                      double& sum_x, double& sum_y, double& sum_z,
                      int& count, double& t) {
@@ -242,6 +297,8 @@ private:
             sum_y += gnss->pos_y;
             sum_z += gnss->pos_z;
             count++;
+
+            gnss_last_time_ = gnss->time;
             if (t == 0.0) t = gnss->time;
         }
     }
@@ -259,18 +316,22 @@ int main(int argc, char* argv[]) {
     const double sim_duration = 10.0;   // seconds
 
     // data
-    std::vector<IMUData> imu0_data;
-    std::vector<IMUData> imu1_data;
-    std::vector<IMUData> imu2_data;
-    std::vector<GNSSData> gnss0_data;
-    std::vector<GNSSData> gnss1_data;
+    SensorIMU imu0(imuQueue0, 100.0);
+    SensorIMU imu1(imuQueue1, 100.0);
+    SensorIMU imu2(imuQueue2, 100.0);
+    SensorGNSS gnss0(gnssQueue0, 20.0);
+    SensorGNSS gnss1(gnssQueue1, 20.0);
 
     // run processing loop
+    // open files
     std::ofstream log("simple_log.txt");
     log << "time,att_x,att_y,att_z,pos_x,pos_y,pos_z\n";
 
+    std::ofstream warn_log("warnings.txt");
+    warn_log << "[Warnings Log]\n";
+
     // processing loop
-    Processing proc(log);
+    Processing proc(log, warn_log);
     std::thread proc_thread(&Processing::run, &proc);
 
     // do I need this?
@@ -280,11 +341,11 @@ int main(int argc, char* argv[]) {
     double sim_time_imu0 = 0.0, sim_time_imu1 = 0.0, sim_time_imu2 = 0.0;
     double sim_time_gnss0 = 0.0, sim_time_gnss1 = 0.0;
 
-    std::thread imu0_thread(SensorIMU, std::ref(sim_time_imu0), std::ref(imuQueue0));
-    std::thread imu1_thread(SensorIMU, std::ref(sim_time_imu1), std::ref(imuQueue1));
-    std::thread imu2_thread(SensorIMU, std::ref(sim_time_imu2), std::ref(imuQueue2));
-    std::thread gnss0_thread(SensorGNSS, std::ref(sim_time_gnss0), std::ref(gnssQueue0));
-    std::thread gnss1_thread(SensorGNSS, std::ref(sim_time_gnss1), std::ref(gnssQueue1));
+    std::thread imu0_thread(&SensorIMU::run, &imu0);
+    std::thread imu1_thread(&SensorIMU::run, &imu1);
+    std::thread imu2_thread(&SensorIMU::run, &imu2);
+    std::thread gnss0_thread(&SensorGNSS::run, &gnss0);
+    std::thread gnss1_thread(&SensorGNSS::run, &gnss1);
 
     // run simulation for the requested duration
     std::this_thread::sleep_for(std::chrono::duration<double>(sim_duration));
