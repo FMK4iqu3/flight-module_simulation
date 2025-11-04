@@ -450,6 +450,7 @@ void run_scenario(const std::string& name,
     std::ofstream warn_log("warn_" + name + ".txt");
 
     auto global_start = std::chrono::steady_clock::now();
+    double sim_duration = 10.0;   // seconds
     FDIR fdir(warn_log);
 
     // data
@@ -483,7 +484,7 @@ void run_scenario(const std::string& name,
     auto start = std::chrono::steady_clock::now();
     while (true) {
         double t_now = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
-        if (t_now > 10.0) break;
+        if (t_now > sim_duration) break;
 
         failure_injector(t_now, imu0, imu1, imu2, gnss0, gnss1);
         std::this_thread::sleep_for(std::chrono::milliseconds(50)); // check every 50ms
@@ -500,7 +501,7 @@ void run_scenario(const std::string& name,
 
     log.close();
     warn_log.close();
-    std::cout << "Simulation done. Wrote warning.txt and simple_log.txt\n"; 
+    std::cout << "Simulation done. Wrote warning.txt and log.txt\n"; 
 }
 
 // ------------- Run Simulation --------------
@@ -533,11 +534,6 @@ int main() {
     }   else {
         std::cout << "Please insert a scenario from 1 to 3.\n";
     }
-    
-    const double sim_duration = 10.0;   // seconds
-
-    // run simulation for the requested duration
-    // std::this_thread::sleep_for(std::chrono::duration<double>(sim_duration));
 
     return 0;
 };
