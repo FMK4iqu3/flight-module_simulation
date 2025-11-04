@@ -265,21 +265,16 @@ public:
 
             // Pop data from all queues
             auto imu0_new = imuQueue0.try_pop();
-            if (imu0_new) last_imu[0] = imu0_new;
             auto imu1_new = imuQueue1.try_pop();
-            if (imu1_new) last_imu[1] = imu1_new;
             auto imu2_new = imuQueue2.try_pop();
-            if (imu2_new) last_imu[2] = imu2_new;
             auto gnss0_new = gnssQueue0.try_pop();
-            if (gnss0_new) last_gnss[0] = gnss0_new;
             auto gnss1_new = gnssQueue1.try_pop();
-            if (gnss1_new) last_gnss[1] = gnss1_new;
             
-            std::optional<IMUData> imu0 = imu0_new ? imu0_new : last_imu[0];
-            std::optional<IMUData> imu1 = imu1_new ? imu1_new : last_imu[1];
-            std::optional<IMUData> imu2 = imu2_new ? imu2_new : last_imu[2];
-            std::optional<GNSSData> gnss0 = gnss0_new ? gnss0_new : last_gnss[0];
-            std::optional<GNSSData> gnss1 = gnss1_new ? gnss1_new : last_gnss[1];
+            std::optional<IMUData> imu0 = imu0_new; 
+            std::optional<IMUData> imu1 = imu1_new; 
+            std::optional<IMUData> imu2 = imu2_new; 
+            std::optional<GNSSData> gnss0 = gnss0_new;
+            std::optional<GNSSData> gnss1 = gnss1_new;
 
             // If simulation is stopping and there is no data anywhere, break
             if (!running.load() &&
