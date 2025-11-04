@@ -1,11 +1,12 @@
 // sim.cpp
 // Author: Kaique Fernandes
 // Version: 0.1
-// Build: g++ -std=c++17 -O2 -pthread sim.cpp -o sim
-// Usage: ./sim <scenario>
-// scenario: 0 = nominal, 1 = IMUs drop out sequentially, 2 = GNSS dropout 500ms
+// Build: g++ -std=c++17 sim.cpp -o sim
+// Usage: ./sim 
+// scenario: 1 = nominal, 2 = IMUs drop out sequentially, 3 = GNSS dropout 500ms
 //
-// Writes TXT to sim_<scenario>_<start_ts>.txt
+// Writes data to sim_<scenario-name>.txt
+// Writes warning and faults to warn_<scenario-name>.txt
 
 #include <iostream>
 #include <thread>
@@ -20,8 +21,11 @@
 #include <fstream>
 #include <atomic>
 #include <limits>
+#include <filesystem>
 
 using namespace std::chrono; 
+namespace fs = std::filesystem;
+
 std::atomic<bool> running{true};
 
 // ------------- Thread-safe queue --------------
@@ -51,10 +55,6 @@ public:
         return val;
     } 
 
-    void stop_waiting() {
-        cv_.notify_all();
-    }
-
 private:
     std::queue<T> q_;
     std::mutex mtx_;
@@ -77,7 +77,6 @@ struct GNSSData {
 // ------------- Queues --------------
 ThreadSafeQueue<IMUData> imuQueue0, imuQueue1, imuQueue2;
 ThreadSafeQueue<GNSSData> gnssQueue0, gnssQueue1;
-// std::atomic<bool> running{true};
 // ------------- FDIR --------------
 class FDIR {
 public:
@@ -151,7 +150,13 @@ public:
         std::mt19937 rdn {42};
         std::normal_distribution<double> noise(0.0, 0.1);
 
-        while (running) {   
+        while (running) {  
+
+            if (!enabled_) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                continue;
+            }
+
             auto now = std::chrono::steady_clock::now();
             double time = std::chrono::duration<double>(now - start_).count();
 
@@ -198,6 +203,12 @@ public:
         std::normal_distribution<double> noise(0.0, 0.1);
                
         while (running) {
+
+            if (!enabled_) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                continue;
+            }
+
             auto now = std::chrono::steady_clock::now();
             double time = std::chrono::duration<double>(now - start_).count();
 
@@ -244,9 +255,6 @@ public:
     std::optional<IMUData> last_imu[3];
     std::optional<GNSSData> last_gnss[2];
     double last_gnss_time_[2] = {0.0, 0.0};
-
-    const double max_age_imu = 0.5;  
-    const double max_age_gnss = 1.0; 
 
     void run(){
 
@@ -299,15 +307,15 @@ public:
             imu_average(imu2, sum_att_x, sum_att_y, sum_att_z, imu_count);
 
             // --- GNSS averaging ---
-            gnss_average(gnss0, sum_pos_x, sum_pos_y, sum_pos_z, gnss_count);
-            gnss_average(gnss1, sum_pos_x, sum_pos_y, sum_pos_z, gnss_count);            
+            gnss_average(gnss0, sum_pos_x, sum_pos_y, sum_pos_z, gnss_count, 0);
+            gnss_average(gnss1, sum_pos_x, sum_pos_y, sum_pos_z, gnss_count, 1);            
             
             // check data
             imu_signal_check(t, imu0, "0");
             imu_signal_check(t, imu1, "1");
             imu_signal_check(t, imu2, "2");
-            gnss_signal_check(t, gnss0, "0", gnss_last_time_);
-            gnss_signal_check(t, gnss1, "1", gnss_last_time_);
+            gnss_signal_check(t, gnss0, "0", last_gnss_time_[0]);
+            gnss_signal_check(t, gnss1, "1", last_gnss_time_[1]);
 
             // outputting log files per module
             log_imu_data(imu0, "0", t);
@@ -345,9 +353,12 @@ private:
     std::ofstream &warn_stream_;
 
     // signal check
-    void gnss_signal_check(double t, const std::optional<GNSSData>& gnss, const std::string& sensor_id, double& last_gnss_time_) {
+    void gnss_signal_check(double t, const std::optional<GNSSData>& gnss, 
+                            const std::string& sensor_id, 
+                            double& last_gnss_time) {
+
         bool missing_gnss = !gnss;
-        bool gnss_old = (t - last_gnss_time_) > 1.0;
+        bool gnss_old = (t - last_gnss_time) > 1.0;
 
         if (missing_gnss) {
             warn_stream_.setf(std::ios::fixed);
@@ -410,7 +421,7 @@ private:
     }
 
     // --- Helper functions ---
-    double gnss_last_time_ = 0.0;
+    // double last_gnss_time_[2] = {0.0, 0.0};
     void imu_average(const std::optional<IMUData>& imu,
                      double& sum_x, double& sum_y, double& sum_z,
                      int& count) {
@@ -425,14 +436,14 @@ private:
 
     void gnss_average(const std::optional<GNSSData>& gnss,
                       double& sum_x, double& sum_y, double& sum_z,
-                      int& count) {
+                      int& count, int index) {
         if (gnss) {
             sum_x += gnss->pos_x;
             sum_y += gnss->pos_y;
             sum_z += gnss->pos_z;
             count++;
 
-            gnss_last_time_ = gnss->time;
+            last_gnss_time_[index] = gnss->time;
             // if (t == 0.0) t = gnss->time;
         }
     }
@@ -446,8 +457,12 @@ void run_scenario(const std::string& name,
     std::cout << "Starting scenario: " << name << std::endl;
 
     // Create logs
-    std::ofstream log("log_" + name + ".txt");
-    std::ofstream warn_log("warn_" + name + ".txt");
+    std::string scenario_name = name;
+    fs::path output_dir = fs::path("output") / scenario_name;
+    fs::create_directories(output_dir);
+
+    std::ofstream data_log(output_dir / "data_log.txt");
+    std::ofstream warn_log(output_dir / "warn_log.txt");
 
     auto global_start = std::chrono::steady_clock::now();
     double sim_duration = 10.0;   // seconds
@@ -459,7 +474,7 @@ void run_scenario(const std::string& name,
     SensorIMU imu2(imuQueue2, fdir, 2, global_start, 100.0);
     SensorGNSS gnss0(gnssQueue0, fdir, 0, global_start, 20.0);
     SensorGNSS gnss1(gnssQueue1, fdir, 1, global_start, 20.0);
-    Processing proc(log, warn_log, fdir, global_start);
+    Processing proc(data_log, warn_log, fdir, global_start);
 
     // threads
     running = true;
@@ -473,12 +488,6 @@ void run_scenario(const std::string& name,
     std::thread imu2_thread(&SensorIMU::run, &imu2);
     std::thread gnss0_thread(&SensorGNSS::run, &gnss0);
     std::thread gnss1_thread(&SensorGNSS::run, &gnss1);
-
-    imuQueue0.stop_waiting();
-    imuQueue1.stop_waiting();
-    imuQueue2.stop_waiting();
-    gnssQueue0.stop_waiting();
-    gnssQueue1.stop_waiting();
 
     // Fault injectoin
     auto start = std::chrono::steady_clock::now();
@@ -499,7 +508,7 @@ void run_scenario(const std::string& name,
     if (gnss1_thread.joinable()) gnss1_thread.join();
     if (proc_thread.joinable()) proc_thread.join();
 
-    log.close();
+    data_log.close();
     warn_log.close();
     std::cout << "Simulation done. Wrote warning.txt and log.txt\n"; 
 }
@@ -520,19 +529,20 @@ int main() {
         // SCENARIO 2: IMU dropouts
         run_scenario("imu_dropout", [](double t, auto& imu0, auto& imu1, auto& imu2, auto&, auto&) {
             if (t > 3.0) imu0.disable();
-            if (t > 6.0) imu1.disable();
-            if (t > 9.0) imu2.disable();
+            if (t > 5.0) imu1.disable();
+            if (t > 7.0) imu2.disable();
         });
     } else if (scenario == 3) {
         //SCENARIO 3: GNSS dropout
         run_scenario("gnss_dropout", [](double t, auto&, auto&, auto&, auto& gnss0, auto& gnss1) {
-            // GNSS off for 500ms
             bool gnss_fail = (t > 4.0 && t < 4.5);
             gnss0.set_enabled(!gnss_fail);
             gnss1.set_enabled(!gnss_fail);
         });
     }   else {
+
         std::cout << "Please insert a scenario from 1 to 3.\n";
+
     }
 
     return 0;
