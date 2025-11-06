@@ -1,0 +1,6 @@
+[WARNING]Missing IMU_0 data for time 0.000130
+[WARNING]Missing IMU_1 data for time 0.000130
+[WARNING]Missing IMU_2 data for time 0.000130
+[WARNING]Missing GNSS_0 at t=0.000130
+[WARNING]Missing GNSS_1 at t=0.000130
+[FDIR] Missing valid data at t=0.000130
