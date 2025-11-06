@@ -235,7 +235,7 @@ private:
     double dt_;
 };
 // ------------- Processing --------------
-struct ProcessingOutput {
+struct ProcessorOutput {
     double time;
     // bool attitude_valid;
     double att_x, att_y, att_z; // averaged rates
@@ -243,9 +243,9 @@ struct ProcessingOutput {
     double pos_x, pos_y, pos_z;
 };
 
-class Processing {
+class DataProcessor {
 public:
-    Processing(std::ofstream& data_os, 
+    DataProcessor(std::ofstream& data_os, 
             std::ofstream& warn_os,
             FDIR& fdir,
             const std::chrono::steady_clock::time_point& start_time) 
@@ -334,7 +334,7 @@ public:
             fdir_.check(t, imu_ok, gnss_ok);
 
             // Log the averaged line 
-            ProcessingOutput out_line{t, att_x, att_y, att_z, pos_x, pos_y, pos_z};
+            ProcessorOutput out_line{t, att_x, att_y, att_z, pos_x, pos_y, pos_z};
             log_line(out_line);
 
             std::this_thread::sleep_for(std::chrono::milliseconds(20)); // 50 Hz
@@ -379,7 +379,7 @@ private:
     }
 
     // log helper functions
-    void log_line(const ProcessingOutput &o) {
+    void log_line(const ProcessorOutput &o) {
         log_stream_.setf(std::ios::fixed);
         log_stream_.precision(6);
         log_stream_ << "=============== AVERAGE ===============\n";
@@ -469,11 +469,11 @@ void run_scenario(const std::string& name,
     SensorIMU imu2(imuQueue2, fdir, 2, global_start, 100.0);
     SensorGNSS gnss0(gnssQueue0, fdir, 0, global_start, 20.0);
     SensorGNSS gnss1(gnssQueue1, fdir, 1, global_start, 20.0);
-    Processing proc(data_log, warn_log, fdir, global_start);
+    DataProcessor proc(data_log, warn_log, fdir, global_start);
 
     // threads
     running = true;
-    std::thread proc_thread(&Processing::run, &proc);
+    std::thread proc_thread(&DataProcessor::run, &proc);
 
     //double sim_time_imu0 = 0.0, sim_time_imu1 = 0.0, sim_time_imu2 = 0.0;
     //double sim_time_gnss0 = 0.0, sim_time_gnss1 = 0.0;
