@@ -1,54 +1,78 @@
-# tec_simulation 
-Spacecraft flight software, among other tasks, processes input data from multiple sensors, executes control loops, and sends commands to several actuators. The control loop may be a function provided by another team like Guidance, Navigation, and Control (GNC). lThe task is to write a simulation for a simplified chain with concurrently executing components, consisting of:
+# Multi-Sensor Fault Detection, Isolation, and Recovery (FDIR) Simulation
 
-Input components
+**Author:** Kaique Fernandes  
+**Version:** 0.1  
+**Build:** `g++ -std=c++17 sim.cpp -o sim`  
+**Tested on:** Ubuntu 22.04 (Linux, g++ 11.4)  
+**Simulation duration:** 10 seconds per run  
 
-IMU component, generating timestamped attitude rate data at 100Hz.
-GNSS component, generating timestamped position data at 20Hz.
-Processing component
+---
+
+## Overview
+
+This simulation models a **multi-sensor navigation system** consisting of:
+- 3 × **IMU sensors** (100 Hz)
+- 2 × **GNSS sensors** (20 Hz)
+- 1 × **Processing module**
+- 1 × **FDIR module** (Fault Detection, Isolation, and Recovery)
+
+Each sensor runs in a **dedicated thread**, producing synthetic noisy data.  
+A central **Processing** thread consumes the data from all sensors, computes averages, detects missing or stale data, and logs results.  
+The **FDIR** module monitors sensor health and logs alarms whenever signals are missing, delayed, or invalid.
+
+---
+
+## System Architecture
+
+Below is an ASCII overview of the software structure (you can replace this section with your rendered diagram):
 
 
-A loop running at 50Hz, reading sensor data and producing filtered outputs. It should
+---
+
+## Design Decisions
+
+### 1. **Thread-Safe Queues**
+Each sensor pushes its output into a `ThreadSafeQueue<T>`.  
+The processing thread pops data at 50 Hz to simulate real-time asynchronous behavior.  
+This approach ensures **safe concurrent access** without blocking the main loop.
+
+### 2. **NaN Handling for Missing Data**
+When a sensor provides no new data (e.g., after a dropout), its corresponding averaged output is explicitly set to `NaN`.  
+This design avoids reusing stale values and makes fault visualization clearer in the output logs.
+
+### 3. **FDIR Integration**
+The FDIR class operates independently and receives:
+- Time notifications (`notify_imu()` / `notify_gnss()`)
+- Validity checks via `check()`
+
+It writes warnings when:
+- Data is missing
+- Data age exceeds 1 second
+- Both IMU and GNSS are invalid simultaneously
+
+### 4. **Scenario-Based Simulation**
+The code supports **three distinct scenarios**, implemented in `run_scenario()` through a failure injector function.
+
+| Scenario | Description | Fault Injection |
+|-----------|--------------|----------------|
+| 1 | **Nominal** | All sensors active for 10 s |
+| 2 | **IMU dropouts** | IMU₀ fails at 3 s, IMU₁ at 5 s, IMU₂ at 7 s |
+| 3 | **GNSS dropout** | Both GNSS units disabled between 4.0–4.5 s |
+
+### 5. **Output Organization**
+All results are automatically stored in:
+output/<scenario_name>/
+├── data_log.txt # Filtered data with NaN where missing
+└── warn_log.txt # Fault and recovery messages
 
 
-Provide attitude rate output based on the average of all available IMU measurements in one tick. Outdated data should be ignored. Raise flag if there is no valid input data available in one tick.
-Provide position output based on the last available GNSS measurement. Raise flag if the last position data is older than 1s.
-FDIR component. A component which
-raises an alarm if the processing component has no valid output.
-raises an alarm if a sensor component is not providing any output for three consecutive nominal measurement intervals.
-In reality, the sensor components would read sensor data from real hardware. Here, you can use a simple function generator to produce valid but varying outputs. Add some noise so that different sensors produce slightly different measurements.
+g++ -std=c++17 sim.cpp -o sim
 
-Task
+project_root/
+├── sim.cpp           # Main simulation source
+├── README.md         # This documentation
+└── output/
+    ├── nominal/
+    ├── imu_dropout/
+    └── gnss_dropout/
 
-Identify a suitable architecture for parallel execution of the components and messaging between them.
-Create a simulation consisting of three IMU components, two GNSS components, and one processing and FDIR component.
-The sensor components should support fault injection for testing
-Create a simple drawing / sketch of your setup and the interactions.
-Provide at least three different runs of your simulation, where each creates a logfile of the filtered data and the status of the alarms, covering the following cases
-Nominal run for 10s
-Failure case where all IMUs drop out one after each other
-
-Failure case where GNSS data drops out for 500ms
-
-Hints
-The focus of the task is software architecture, interaction of components, code quality, and how it is executed.
-
-If you are unclear about some instructions, go ahead with your best guess and explain your reasoning in comments.
-
-The solution should be object oriented.
-
-It is up to you how to inject the failures.
-
-You do not have to provide the generated logfiles or binaries.
-
-You may provide a plot of the outputs.
-
-Your submission should allow an easy execution of all three simulation cases.
-
-Constraints
-
-Use modern C++.
-
-You may only use the standard library, no further dependencies allowed (except a test framework if you want).
-
-Your code should come with instructions on how to execute it, it should run under Linux. Use any common build system if necessary.
