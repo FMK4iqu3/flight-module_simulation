@@ -184,10 +184,14 @@ public:
 
             IMUData data;
             data.time = time;
+            
+            // initial muster data - amplitudes
+            double p=0.01, q=0.01, r=0.01;
+            double omega_p=0.01, omega_q=0.01, omega_r=0.01;
 
-            data.rate_x = 0.01 * std::sin(2 * M_PI * 0.2 * time) + noise(rdn);
-            data.rate_y = 0.01 * std::cos(2 * M_PI * 0.15 * time) + noise(rdn);
-            data.rate_z = 0.01 * std::sin(2 * M_PI * 0.1 * time) + noise(rdn);
+            data.rate_x = p * std::sin(omega_p * time) + noise(rdn);
+            data.rate_y = q * std::cos(omega_q * time) + noise(rdn);
+            data.rate_z = r * std::sin(omega_r * time) + noise(rdn);
             queue_.push(data);
 
             fdir_.notify_imu(sensor_id_, data.time);
@@ -240,10 +244,16 @@ public:
 
             GNSSData data;
             data.time = time;
-            // generate slowly changing position (e.g., linear + small sinusoid) -> review values
-            data.pos_x = 7000.0 + 0.1 * time + 2.0 * std::sin(2.0 * M_PI * 0.01 * time) + noise(rdn);
-            data.pos_y = -1200.0 + 0.05 * time + 1.2 * std::cos(2.0 * M_PI * 0.012 * time) + noise(rdn);
-            data.pos_z = 10.0 + 0.01 * std::sin(2.0 * M_PI * 0.02 * time) + noise(rdn);
+            // generate slowly changing position (linear + small sinusoid)
+            // initial muster data
+            double z0 = 1000; // z position
+            double R = 7000; // Earth radius in km
+            double omega = 0.001; // approximate orbital angular rate in rad/s
+            double A = 100; // oscillaiton amplitude
+
+            data.pos_x = R * std::cos(omega * time) + noise(rdn);
+            data.pos_y = R * std::sin(omega * time) + noise(rdn);
+            data.pos_z = z0 + A * std::sin(omega * time * 0.5) + noise(rdn);
             queue_.push(data);
             
             fdir_.notify_gnss(sensor_id_, data.time);
