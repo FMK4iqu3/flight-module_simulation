@@ -65,14 +65,3 @@ output/<scenario_name>/
 ├── data_log.txt # Filtered data with NaN where missing
 └── warn_log.txt # Fault and recovery messages
 
-
-g++ -std=c++17 sim.cpp -o sim
-
-project_root/
-├── sim.cpp           # Main simulation source
-├── README.md         # This documentation
-└── output/
-    ├── nominal/
-    ├── imu_dropout/
-    └── gnss_dropout/
-
