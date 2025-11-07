@@ -110,7 +110,7 @@ public:
         const double GNSS_TIMEOUT = 0.15;  // 3 × 50ms (20 Hz)
 
         // --- Check no valid input ---
-        if (!imu_valid || !gnss_valid) {
+        if (!imu_valid && !gnss_valid) {
             warn_stream_ << "[FDIR] Missing valid data at t=" << current_time << "\n";
         }
 
